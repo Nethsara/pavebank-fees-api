@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+echo "pre-commit: gofmt"
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+	echo "The following files are not gofmt'd:"
+	echo "$unformatted"
+	exit 1
+fi
+
+echo "pre-commit: go vet"
+go vet ./...
+
+echo "pre-commit: go test -race"
+go test ./... -race
+
+echo "pre-commit: all checks passed"
