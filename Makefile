@@ -1,0 +1,3 @@
+test-money:
+	go mod tidy
+	go test ./bill/money/...
