@@ -10,7 +10,7 @@ import (
 type CreateBillRequest struct {
 	BillID    string    `json:"billId,omitempty"`
 	Currency  string    `json:"currency"`
-	Reference string 	`json:"reference,omitempty"`
+	Reference string    `json:"reference,omitempty"`
 	PeriodEnd time.Time `json:"periodEnd"`
 }
 

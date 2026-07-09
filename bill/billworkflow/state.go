@@ -27,13 +27,14 @@ var (
 	ErrBillNotOpen      = errors.New("bill is not open")
 	ErrCurrencyMismatch = errors.New("line item currency does not match bill currency")
 	ErrInvalidLineItem  = errors.New("invalid line item")
+	ErrLineItemNotFound = errors.New("line item not found")
 )
 
 const (
-	UpdateAddLineItem = "addLineItem"
+	UpdateAddLineItem  = "addLineItem"
 	UpdateVoidLineItem = "voidLineItem"
-	UpdateCloseBill   = "closeBill"
-	QueryGetBill      = "getBill"
+	UpdateCloseBill    = "closeBill"
+	QueryGetBill       = "getBill"
 )
 
 const (
@@ -55,7 +56,7 @@ type LineItem struct {
 type CreateBillInput struct {
 	BillID    string         `json:"billId"`
 	Currency  money.Currency `json:"currency"`
-	Reference string    	 `json:"reference,omitempty"`
+	Reference string         `json:"reference,omitempty"`
 	PeriodEnd time.Time      `json:"periodEnd"`
 }
 

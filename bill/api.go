@@ -15,6 +15,9 @@ import (
 	"go.temporal.io/sdk/temporal"
 )
 
+// CreateBill starts a new bill/workflow for a fee period.
+//
+//encore:api public method=POST path=/bills
 func (s *Service) CreateBill(ctx context.Context, req *CreateBillRequest) (*BillResponse, error) {
 	currency := money.Currency(req.Currency)
 	if !money.IsSupported(currency) {
@@ -32,9 +35,9 @@ func (s *Service) CreateBill(ctx context.Context, req *CreateBillRequest) (*Bill
 	in := billworkflow.CreateBillInput{BillID: billID, Currency: currency, Reference: req.Reference, PeriodEnd: req.PeriodEnd}
 	createdAt := time.Now()
 	_, err := s.client.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:        billWorkflowID(billID),
-		TaskQueue: billworkflow.TaskQueue,
-		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		ID:                       billWorkflowID(billID),
+		TaskQueue:                billworkflow.TaskQueue,
+		WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
 	}, billworkflow.BillWorkflow, in)
 	if err != nil {
@@ -58,6 +61,9 @@ func (s *Service) CreateBill(ctx context.Context, req *CreateBillRequest) (*Bill
 	}), nil
 }
 
+// GetBill returns the current state of a bill, including its line items and running total.
+//
+//encore:api public method=GET path=/bills/:billID
 func (s *Service) GetBill(ctx context.Context, billID string) (*BillResponse, error) {
 	encoded, err := s.client.QueryWorkflow(ctx, billWorkflowID(billID), "", billworkflow.QueryGetBill)
 	if err != nil {
@@ -70,6 +76,9 @@ func (s *Service) GetBill(ctx context.Context, billID string) (*BillResponse, er
 	return billResponse(state), nil
 }
 
+// AddLineItem appends a line item to an open bill. Rejected if the bill is closed.
+//
+//encore:api public method=POST path=/bills/:billID/line-items
 func (s *Service) AddLineItem(ctx context.Context, billID string, req *AddLineItemRequest) (*AddLineItemResponse, error) {
 	if req.Description == "" {
 		return nil, errs.B().Code(errs.InvalidArgument).Msg("description is required").Err()
@@ -107,6 +116,9 @@ func (s *Service) AddLineItem(ctx context.Context, billID string, req *AddLineIt
 	}, nil
 }
 
+// VoidLineItem soft-deletes a line item on an open bill and recomputes the total.
+//
+//encore:api public method=POST path=/bills/:billID/line-items/:lineItemID/void
 func (s *Service) VoidLineItem(ctx context.Context, billID, lineItemID string) (*VoidLineItemResponse, error) {
 	handle, err := s.client.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
 		WorkflowID:   billWorkflowID(billID),
@@ -129,7 +141,9 @@ func (s *Service) VoidLineItem(ctx context.Context, billID, lineItemID string) (
 	}, nil
 }
 
-
+// CloseBill closes an open bill, finalizing the total and the set of line items charged.
+//
+//encore:api public method=POST path=/bills/:billID/close
 func (s *Service) CloseBill(ctx context.Context, billID string) (*BillResponse, error) {
 	handle, err := s.client.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
 		WorkflowID:   billWorkflowID(billID),
