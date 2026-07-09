@@ -132,7 +132,6 @@ func TestIdempotentAddLineItem(t *testing.T) {
 		})
 	}, time.Minute)
 
-	
 	env.RegisterDelayedCallback(func() {
 		sendUpdate(env, UpdateAddLineItem, nil, &retryErr, AddLineItemInput{
 			IdempotencyKey: key, Description: "one-time fee", Amount: amount(t, money.USD, "5.00"),

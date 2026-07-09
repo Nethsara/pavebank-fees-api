@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-
 type Currency string
 
 const (
@@ -117,7 +116,6 @@ func (m Money) Add(other Money) (Money, error) {
 	}
 	return Money{Currency: m.Currency, MinorUnits: sum}, nil
 }
-
 
 func (m Money) DecimalString() string {
 	exp := exponents[m.Currency]

@@ -66,7 +66,6 @@ func validateVoidLineItem(state BillState, in VoidLineItemInput) error {
 	return fmt.Errorf("%w: %q on bill %s", ErrLineItemNotFound, in.LineItemID, state.BillID)
 }
 
-
 func recomputeTotal(currency money.Currency, items []LineItem) (money.Money, error) {
 	total := money.Money{Currency: currency, MinorUnits: 0}
 	for _, li := range items {
