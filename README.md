@@ -101,6 +101,12 @@ out of scope here, but it's a small addition: one `PersistInvoice` activity call
   to the existing run, unless `WorkflowExecutionErrorWhenAlreadyStarted: true` is also set on
   `StartWorkflowOptions`. `CreateBill` sets it explicitly for this reason. Verified locally: create a bill,
   let it auto-close, `POST /bills` again with the same `billId`, get `409 already_exists`.
+- A collision on that ID isn't automatically treated as an error, though. If the existing bill's currency,
+  `periodEnd`, and reference all match the incoming request, `CreateBill` returns the existing bill as a
+  `200` instead of erroring, the same idempotent treatment `AddLineItem` gives a repeated idempotency key:
+  this is what makes a client-side retry after a dropped response safe, rather than forcing every retry to
+  handle a `409` for what might be its own earlier request succeeding. If any of those three fields differ,
+  it's a genuine collision on a client-chosen ID and still returns `409`.
 
 ## API
 
@@ -196,24 +202,37 @@ Then exercise it with the `curl` walkthrough above, or through the Encore dev da
 ## Testing
 
 ```bash
-make test-all           # via the Makefile, runs `go mod tidy` first
+make test-all             # via the Makefile: `go mod tidy`, then `encore test ./...`
 
 # or directly:
-go test ./...          # everything
-go test ./... -race    # race detector; the workflow tests exercise concurrent Update delivery
+encore test ./...         # everything, including the bill package itself
+go test ./bill/money/... ./bill/billworkflow/...   # just these two also run under plain `go test`
 ```
+
+`bill/api.go` calls `encore.dev/beta/errs`, which panics if it isn't running inside the Encore
+runtime, so `go test ./bill/...` (the top-level package) only works via `encore test`, not plain
+`go test`. `bill/money` and `bill/billworkflow` have no Encore runtime dependency and run fine
+under either.
 
 - [`bill/money`](bill/money/money.go): decimal parsing, formatting, overflow and currency-mismatch rejection.
   Pure unit tests, no Temporal involved.
-- [`bill/billworkflow/validate_test.go`](bill/billworkflow/validate_test.go): the `addLineItem`/`closeBill`
-  business rules (validators) tested as plain Go functions. Kept separate from the Temporal test harness
-  deliberately: `TestWorkflowEnvironment` delivers Updates asynchronously relative to when they're issued
-  (documented in [`bill_workflow_test.go`](bill/billworkflow/bill_workflow_test.go)), which makes it a poor
-  fit for testing a single validator branch in isolation, but a good fit for the integration scenarios below.
+- [`bill/billworkflow/validate_test.go`](bill/billworkflow/validate_test.go): the `addLineItem`/`closeBill`/
+  `voidLineItem` business rules (validators) tested as plain Go functions. Kept separate from the Temporal
+  test harness deliberately: `TestWorkflowEnvironment` delivers Updates asynchronously relative to when
+  they're issued (documented in [`bill_workflow_test.go`](bill/billworkflow/bill_workflow_test.go)), which
+  makes it a poor fit for testing a single validator branch in isolation, but a good fit for the integration
+  scenarios below.
 - [`bill/billworkflow/bill_workflow_test.go`](bill/billworkflow/bill_workflow_test.go): full
   `TestWorkflowEnvironment`-based scenarios, adding line items and closing manually, a rejected currency
-  mismatch leaving state untouched, idempotent retries, auto-close on the period timer, voiding a line item
-  (excluded from total, still present, idempotent re-void), and the `getBill` query mid-lifecycle.
+  mismatch leaving state untouched, idempotent retries (including a rejected key reuse with a different
+  payload), auto-close on the period timer, voiding a line item (excluded from total, still present,
+  idempotent re-void, rejected for an unknown ID), and the `getBill` query mid-lifecycle.
+- [`bill/api_test.go`](bill/api_test.go): `mapBillWorkflowErr`'s error-code translation for every
+  `ApplicationError` type the workflow can raise, plus `isValidBillID`'s accept/reject cases. This is the
+  exact layer where a real bug slipped through earlier (a Temporal Go SDK quirk where
+  `client.ExecuteWorkflow` silently swallows `WorkflowExecutionAlreadyStarted` unless
+  `WorkflowExecutionErrorWhenAlreadyStarted` is set), caught only by manual end-to-end testing rather than
+  any automated test, which is why it's covered here now.
 
 ## Future considerations
 

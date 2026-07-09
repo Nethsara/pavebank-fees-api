@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 
 	"encore.app/bill/billworkflow"
 	"go.temporal.io/sdk/client"
@@ -45,4 +46,10 @@ func (s *Service) Shutdown(force context.Context) {
 
 func billWorkflowID(billID string) string {
 	return "bill:" + billID
+}
+
+var billIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
+
+func isValidBillID(billID string) bool {
+	return billIDPattern.MatchString(billID)
 }

@@ -1,11 +1,13 @@
 package billworkflow
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"encore.app/bill/money"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -16,6 +18,12 @@ func amount(t *testing.T, c money.Currency, s string) money.Money {
 	return m
 }
 
+func requireApplicationErrorType(t *testing.T, err error, wantType string) {
+	t.Helper()
+	var appErr *temporal.ApplicationError
+	require.True(t, errors.As(err, &appErr), "expected a *temporal.ApplicationError, got %T: %v", err, err)
+	require.Equal(t, wantType, appErr.Type())
+}
 
 func sendUpdate(env *testsuite.TestWorkflowEnvironment, name string, resultOut *interface{}, errOut *error, args ...interface{}) {
 	cb := &testsuite.TestUpdateCallback{
@@ -173,6 +181,160 @@ func TestAutoCloseOnPeriodEnd(t *testing.T) {
 	require.Equal(t, StatusClosed, result.Status)
 	require.Equal(t, ClosedPeriodEnd, result.ClosedReason)
 	require.Equal(t, "2.00", result.Total.DecimalString())
+}
+
+func TestVoidLineItem_ExcludesFromTotalButKeepsAuditTrail(t *testing.T) {
+	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
+
+	periodEnd := time.Now().Add(24 * time.Hour)
+	in := CreateBillInput{BillID: "bill-void-1", Currency: money.USD, PeriodEnd: periodEnd}
+
+	var item1Err, item2Err, voidErr, closeErr error
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateAddLineItem, nil, &item1Err, AddLineItemInput{
+			Description: "API calls", Amount: amount(t, money.USD, "10.50"),
+		})
+	}, time.Minute)
+
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateAddLineItem, nil, &item2Err, AddLineItemInput{
+			Description: "Storage", Amount: amount(t, money.USD, "4.49"),
+		})
+	}, 2*time.Minute)
+
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateVoidLineItem, nil, &voidErr, VoidLineItemInput{LineItemID: "li-2"})
+	}, 3*time.Minute)
+
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateCloseBill, nil, &closeErr, CloseBillInput{})
+	}, 4*time.Minute)
+
+	env.ExecuteWorkflow(BillWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.NoError(t, item1Err)
+	require.NoError(t, item2Err)
+	require.NoError(t, voidErr)
+	require.NoError(t, closeErr)
+
+	var result BillState
+	require.NoError(t, env.GetWorkflowResult(&result))
+
+	require.Equal(t, "10.50", result.Total.DecimalString(), "voided item must be excluded from the total")
+	require.Len(t, result.LineItems, 2, "voided item must stay in the list as an audit trail")
+	require.False(t, result.LineItems[0].Voided)
+	require.True(t, result.LineItems[1].Voided)
+	require.NotNil(t, result.LineItems[1].VoidedAt)
+}
+
+func TestVoidLineItem_IsIdempotentOnRetry(t *testing.T) {
+	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
+
+	periodEnd := time.Now().Add(24 * time.Hour)
+	in := CreateBillInput{BillID: "bill-void-2", Currency: money.USD, PeriodEnd: periodEnd}
+
+	var addErr, void1Err, void2Err, closeErr error
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateAddLineItem, nil, &addErr, AddLineItemInput{
+			Description: "one-time fee", Amount: amount(t, money.USD, "5.00"),
+		})
+	}, time.Minute)
+
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateVoidLineItem, nil, &void1Err, VoidLineItemInput{LineItemID: "li-1"})
+	}, 2*time.Minute)
+
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateVoidLineItem, nil, &void2Err, VoidLineItemInput{LineItemID: "li-1"})
+	}, 3*time.Minute)
+
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateCloseBill, nil, &closeErr, CloseBillInput{})
+	}, 4*time.Minute)
+
+	env.ExecuteWorkflow(BillWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.NoError(t, addErr)
+	require.NoError(t, void1Err)
+	require.NoError(t, void2Err)
+	require.NoError(t, closeErr)
+
+	var result BillState
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "0.00", result.Total.DecimalString())
+	require.Len(t, result.LineItems, 1)
+	require.True(t, result.LineItems[0].Voided)
+}
+
+func TestVoidLineItem_RejectsUnknownID(t *testing.T) {
+	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
+
+	periodEnd := time.Now().Add(24 * time.Hour)
+	in := CreateBillInput{BillID: "bill-void-3", Currency: money.USD, PeriodEnd: periodEnd}
+
+	var voidErr, closeErr error
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateVoidLineItem, nil, &voidErr, VoidLineItemInput{LineItemID: "li-999"})
+	}, time.Minute)
+
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateCloseBill, nil, &closeErr, CloseBillInput{})
+	}, 2*time.Minute)
+
+	env.ExecuteWorkflow(BillWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.NoError(t, closeErr)
+	require.Error(t, voidErr)
+	require.ErrorContains(t, voidErr, ErrLineItemNotFound.Error())
+	requireApplicationErrorType(t, voidErr, ErrTypeLineItemNotFound)
+}
+
+func TestIdempotentAddLineItem_RejectsKeyReuseWithDifferentPayload(t *testing.T) {
+	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
+
+	periodEnd := time.Now().Add(24 * time.Hour)
+	in := CreateBillInput{BillID: "bill-idem-conflict", Currency: money.USD, PeriodEnd: periodEnd}
+
+	const key = "retry-key-conflict"
+
+	var firstErr, conflictErr, closeErr error
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateAddLineItem, nil, &firstErr, AddLineItemInput{
+			IdempotencyKey: key, Description: "one-time fee", Amount: amount(t, money.USD, "5.00"),
+		})
+	}, time.Minute)
+
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateAddLineItem, nil, &conflictErr, AddLineItemInput{
+			IdempotencyKey: key, Description: "one-time fee", Amount: amount(t, money.USD, "500.00"),
+		})
+	}, 2*time.Minute)
+
+	env.RegisterDelayedCallback(func() {
+		sendUpdate(env, UpdateCloseBill, nil, &closeErr, CloseBillInput{})
+	}, 3*time.Minute)
+
+	env.ExecuteWorkflow(BillWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.NoError(t, firstErr)
+	require.NoError(t, closeErr)
+
+	require.Error(t, conflictErr)
+	require.ErrorContains(t, conflictErr, ErrIdempotencyKeyReused.Error())
+	requireApplicationErrorType(t, conflictErr, ErrTypeIdempotencyKeyReused)
+
+	var result BillState
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Len(t, result.LineItems, 1, "the conflicting retry must not have added a second line item")
+	require.Equal(t, "5.00", result.Total.DecimalString())
 }
 
 func TestGetBillQuery(t *testing.T) {

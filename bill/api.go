@@ -26,14 +26,18 @@ func (s *Service) CreateBill(ctx context.Context, req *CreateBillRequest) (*Bill
 	if req.PeriodEnd.IsZero() {
 		return nil, errs.B().Code(errs.InvalidArgument).Msg("periodEnd is required").Err()
 	}
+	if !req.PeriodEnd.After(time.Now()) {
+		return nil, errs.B().Code(errs.InvalidArgument).Msg("periodEnd must be in the future").Err()
+	}
 
 	billID := req.BillID
 	if billID == "" {
 		billID = uuid.NewString()
+	} else if !isValidBillID(billID) {
+		return nil, errs.B().Code(errs.InvalidArgument).Msgf("invalid billId %q: must match %s", billID, billIDPattern).Err()
 	}
 
 	in := billworkflow.CreateBillInput{BillID: billID, Currency: currency, Reference: req.Reference, PeriodEnd: req.PeriodEnd}
-	createdAt := time.Now()
 	_, err := s.client.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:                                       billWorkflowID(billID),
 		TaskQueue:                                billworkflow.TaskQueue,
@@ -44,22 +48,32 @@ func (s *Service) CreateBill(ctx context.Context, req *CreateBillRequest) (*Bill
 	if err != nil {
 		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
 		if errors.As(err, &alreadyStarted) {
-			return nil, errs.B().Code(errs.AlreadyExists).Msgf("bill %q already exists", billID).Err()
+			return s.resolveBillAlreadyExists(ctx, billID, req)
 		}
 		return nil, errs.B().Code(errs.Internal).Cause(err).Msg("failed to start bill").Err()
 	}
 
-	zero, _ := money.Zero(currency)
-	return billResponse(billworkflow.BillState{
-		BillID:    billID,
-		Currency:  currency,
-		Reference: req.Reference,
-		Status:    billworkflow.StatusOpen,
-		Total:     zero,
-		LineItems: nil,
-		PeriodEnd: req.PeriodEnd,
-		CreatedAt: createdAt,
-	}), nil
+	return s.GetBill(ctx, billID)
+}
+
+func (s *Service) resolveBillAlreadyExists(ctx context.Context, billID string, req *CreateBillRequest) (*BillResponse, error) {
+	existing, err := s.GetBill(ctx, billID)
+	if err != nil {
+		return nil, errs.B().Code(errs.AlreadyExists).Msgf("bill %q already exists", billID).Err()
+	}
+
+	if !billMatchesCreateRequest(existing, req) {
+		return nil, errs.B().Code(errs.AlreadyExists).
+			Msgf("bill %q already exists with a different currency, periodEnd, or reference", billID).Err()
+	}
+
+	return existing, nil
+}
+
+func billMatchesCreateRequest(existing *BillResponse, req *CreateBillRequest) bool {
+	return existing.Currency == req.Currency &&
+		existing.PeriodEnd.Equal(req.PeriodEnd) &&
+		existing.Reference == req.Reference
 }
 
 // GetBill returns the current state of a bill, including its line items and running total.
@@ -173,6 +187,8 @@ func (s *Service) mapBillWorkflowErr(ctx context.Context, billID string, err err
 			return errs.B().Code(errs.InvalidArgument).Msg(appErr.Message()).Err()
 		case billworkflow.ErrTypeLineItemNotFound:
 			return errs.B().Code(errs.NotFound).Msg(appErr.Message()).Err()
+		case billworkflow.ErrTypeIdempotencyKeyReused:
+			return errs.B().Code(errs.Aborted).Msg(appErr.Message()).Err()
 		default:
 			return errs.B().Code(errs.Internal).Cause(appErr).Err()
 		}

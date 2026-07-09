@@ -24,10 +24,11 @@ const (
 )
 
 var (
-	ErrBillNotOpen      = errors.New("bill is not open")
-	ErrCurrencyMismatch = errors.New("line item currency does not match bill currency")
-	ErrInvalidLineItem  = errors.New("invalid line item")
-	ErrLineItemNotFound = errors.New("line item not found")
+	ErrBillNotOpen          = errors.New("bill is not open")
+	ErrCurrencyMismatch     = errors.New("line item currency does not match bill currency")
+	ErrInvalidLineItem      = errors.New("invalid line item")
+	ErrLineItemNotFound     = errors.New("line item not found")
+	ErrIdempotencyKeyReused = errors.New("idempotency key already used with a different request")
 )
 
 const (
@@ -38,10 +39,11 @@ const (
 )
 
 const (
-	ErrTypeBillNotOpen      = "BillNotOpen"
-	ErrTypeCurrencyMismatch = "CurrencyMismatch"
-	ErrTypeInvalidLineItem  = "InvalidLineItem"
-	ErrTypeLineItemNotFound = "LineItemNotFound"
+	ErrTypeBillNotOpen          = "BillNotOpen"
+	ErrTypeCurrencyMismatch     = "CurrencyMismatch"
+	ErrTypeInvalidLineItem      = "InvalidLineItem"
+	ErrTypeLineItemNotFound     = "LineItemNotFound"
+	ErrTypeIdempotencyKeyReused = "IdempotencyKeyReused"
 )
 
 type LineItem struct {
@@ -69,6 +71,12 @@ type AddLineItemInput struct {
 type AddLineItemResult struct {
 	LineItem     LineItem    `json:"lineItem"`
 	RunningTotal money.Money `json:"runningTotal"`
+}
+
+type idempotentAddLineItem struct {
+	Description string
+	Amount      money.Money
+	Result      AddLineItemResult
 }
 
 type VoidLineItemInput struct {

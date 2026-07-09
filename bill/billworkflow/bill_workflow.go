@@ -21,6 +21,8 @@ func toApplicationError(err error) error {
 		return temporal.NewApplicationError(err.Error(), ErrTypeInvalidLineItem)
 	case errors.Is(err, ErrLineItemNotFound):
 		return temporal.NewApplicationError(err.Error(), ErrTypeLineItemNotFound)
+	case errors.Is(err, ErrIdempotencyKeyReused):
+		return temporal.NewApplicationError(err.Error(), ErrTypeIdempotencyKeyReused)
 	default:
 		return err
 	}
@@ -38,6 +40,9 @@ func validateAddLineItem(state BillState, in AddLineItemInput) error {
 	}
 	if in.Amount.MinorUnits <= 0 {
 		return fmt.Errorf("%w: amount must be positive", ErrInvalidLineItem)
+	}
+	if _, err := state.Total.Add(in.Amount); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidLineItem, err)
 	}
 	return nil
 }
@@ -89,14 +94,18 @@ func BillWorkflow(ctx workflow.Context, in CreateBillInput) (BillState, error) {
 		CreatedAt: workflow.Now(ctx),
 	}
 
-	seen := make(map[string]AddLineItemResult)
+	seen := make(map[string]idempotentAddLineItem)
 	closeRequested := false
 
 	err := workflow.SetUpdateHandlerWithOptions(ctx, UpdateAddLineItem,
 		func(ctx workflow.Context, in AddLineItemInput) (AddLineItemResult, error) {
 			if in.IdempotencyKey != "" {
 				if cached, ok := seen[in.IdempotencyKey]; ok {
-					return cached, nil
+					if cached.Description != in.Description || cached.Amount != in.Amount {
+						err := fmt.Errorf("%w: %q", ErrIdempotencyKeyReused, in.IdempotencyKey)
+						return AddLineItemResult{}, toApplicationError(err)
+					}
+					return cached.Result, nil
 				}
 			}
 
@@ -117,7 +126,11 @@ func BillWorkflow(ctx workflow.Context, in CreateBillInput) (BillState, error) {
 
 			result := AddLineItemResult{LineItem: item, RunningTotal: state.Total}
 			if in.IdempotencyKey != "" {
-				seen[in.IdempotencyKey] = result
+				seen[in.IdempotencyKey] = idempotentAddLineItem{
+					Description: in.Description,
+					Amount:      in.Amount,
+					Result:      result,
+				}
 			}
 			return result, nil
 		},
@@ -154,7 +167,7 @@ func BillWorkflow(ctx workflow.Context, in CreateBillInput) (BillState, error) {
 
 				return VoidLineItemResult{LineItem: *li, RunningTotal: state.Total}, nil
 			}
-			return VoidLineItemResult{}, fmt.Errorf("%w: %q", ErrLineItemNotFound, in.LineItemID)
+			return VoidLineItemResult{}, toApplicationError(fmt.Errorf("%w: %q", ErrLineItemNotFound, in.LineItemID))
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(ctx workflow.Context, in VoidLineItemInput) error {

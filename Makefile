@@ -9,5 +9,5 @@ test-money: tidy
 test-billworkflow: tidy
 	go test ./bill/billworkflow/...
 
-test-all: tidy 
-	make test-money && make test-billworkflow
+test-all: tidy
+	encore test ./...
