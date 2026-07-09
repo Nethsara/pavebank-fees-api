@@ -10,6 +10,7 @@ import (
 	"go.temporal.io/sdk/worker"
 )
 
+//encore:service
 type Service struct {
 	client client.Client
 	worker worker.Worker

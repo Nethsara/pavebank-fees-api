@@ -35,10 +35,11 @@ func (s *Service) CreateBill(ctx context.Context, req *CreateBillRequest) (*Bill
 	in := billworkflow.CreateBillInput{BillID: billID, Currency: currency, Reference: req.Reference, PeriodEnd: req.PeriodEnd}
 	createdAt := time.Now()
 	_, err := s.client.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:                       billWorkflowID(billID),
-		TaskQueue:                billworkflow.TaskQueue,
-		WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
-		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
+		ID:                                       billWorkflowID(billID),
+		TaskQueue:                                billworkflow.TaskQueue,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		WorkflowIDConflictPolicy:                 enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
 	}, billworkflow.BillWorkflow, in)
 	if err != nil {
 		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
