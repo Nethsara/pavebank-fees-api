@@ -9,6 +9,7 @@ import (
 	"encore.app/bill/money"
 	"encore.dev/beta/errs"
 	"github.com/google/uuid"
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
@@ -28,11 +29,13 @@ func (s *Service) CreateBill(ctx context.Context, req *CreateBillRequest) (*Bill
 		billID = uuid.NewString()
 	}
 
-	in := billworkflow.CreateBillInput{BillID: billID, Currency: currency, PeriodEnd: req.PeriodEnd}
+	in := billworkflow.CreateBillInput{BillID: billID, Currency: currency, Reference: req.Reference, PeriodEnd: req.PeriodEnd}
 	createdAt := time.Now()
 	_, err := s.client.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:        billWorkflowID(billID),
 		TaskQueue: billworkflow.TaskQueue,
+		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
 	}, billworkflow.BillWorkflow, in)
 	if err != nil {
 		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
@@ -46,6 +49,7 @@ func (s *Service) CreateBill(ctx context.Context, req *CreateBillRequest) (*Bill
 	return billResponse(billworkflow.BillState{
 		BillID:    billID,
 		Currency:  currency,
+		Reference: req.Reference,
 		Status:    billworkflow.StatusOpen,
 		Total:     zero,
 		LineItems: nil,
@@ -57,7 +61,7 @@ func (s *Service) CreateBill(ctx context.Context, req *CreateBillRequest) (*Bill
 func (s *Service) GetBill(ctx context.Context, billID string) (*BillResponse, error) {
 	encoded, err := s.client.QueryWorkflow(ctx, billWorkflowID(billID), "", billworkflow.QueryGetBill)
 	if err != nil {
-		return nil, mapBillWorkflowErr(billID, err)
+		return nil, s.mapBillWorkflowErr(ctx, billID, err)
 	}
 	var state billworkflow.BillState
 	if err := encoded.Get(&state); err != nil {
@@ -89,12 +93,12 @@ func (s *Service) AddLineItem(ctx context.Context, billID string, req *AddLineIt
 		Args:         []interface{}{in},
 	})
 	if err != nil {
-		return nil, mapBillWorkflowErr(billID, err)
+		return nil, s.mapBillWorkflowErr(ctx, billID, err)
 	}
 
 	var result billworkflow.AddLineItemResult
 	if err := handle.Get(ctx, &result); err != nil {
-		return nil, mapBillWorkflowErr(billID, err)
+		return nil, s.mapBillWorkflowErr(ctx, billID, err)
 	}
 
 	return &AddLineItemResponse{
@@ -111,12 +115,12 @@ func (s *Service) CloseBill(ctx context.Context, billID string) (*BillResponse, 
 		Args:         []interface{}{billworkflow.CloseBillInput{}},
 	})
 	if err != nil {
-		return nil, mapBillWorkflowErr(billID, err)
+		return nil, s.mapBillWorkflowErr(ctx, billID, err)
 	}
 
 	var state billworkflow.BillState
 	if err := handle.Get(ctx, &state); err != nil {
-		return nil, mapBillWorkflowErr(billID, err)
+		return nil, s.mapBillWorkflowErr(ctx, billID, err)
 	}
 	return billResponse(state), nil
 }
