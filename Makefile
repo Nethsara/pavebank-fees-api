@@ -1,4 +1,4 @@
-.PHONY: tidy test-money test-billworkflow
+.PHONY: tidy test-money test-billworkflow test-all
 
 tidy:
 	go mod tidy
