@@ -19,6 +19,8 @@ func toApplicationError(err error) error {
 		return temporal.NewApplicationError(err.Error(), ErrTypeCurrencyMismatch)
 	case errors.Is(err, ErrInvalidLineItem):
 		return temporal.NewApplicationError(err.Error(), ErrTypeInvalidLineItem)
+	case errors.Is(err, ErrLineItemNotFound):
+		return temporal.NewApplicationError(err.Error(), ErrTypeLineItemNotFound)
 	default:
 		return err
 	}
@@ -47,10 +49,39 @@ func validateCloseBill(state BillState) error {
 	return nil
 }
 
+func validateVoidLineItem(state BillState, in VoidLineItemInput) error {
+	if state.Status != StatusOpen {
+		return fmt.Errorf("%w: bill %s", ErrBillNotOpen, state.BillID)
+	}
+	for _, li := range state.LineItems {
+		if li.ID == in.LineItemID {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %q on bill %s", ErrLineItemNotFound, in.LineItemID, state.BillID)
+}
+
+
+func recomputeTotal(currency money.Currency, items []LineItem) (money.Money, error) {
+	total := money.Money{Currency: currency, MinorUnits: 0}
+	for _, li := range items {
+		if li.Voided {
+			continue
+		}
+		var err error
+		total, err = total.Add(li.Amount)
+		if err != nil {
+			return money.Money{}, err
+		}
+	}
+	return total, nil
+}
+
 func BillWorkflow(ctx workflow.Context, in CreateBillInput) (BillState, error) {
 	state := BillState{
 		BillID:    in.BillID,
 		Currency:  in.Currency,
+		Reference: in.Reference,
 		Status:    StatusOpen,
 		Total:     money.Money{Currency: in.Currency, MinorUnits: 0},
 		LineItems: []LineItem{},
@@ -93,6 +124,41 @@ func BillWorkflow(ctx workflow.Context, in CreateBillInput) (BillState, error) {
 		workflow.UpdateHandlerOptions{
 			Validator: func(ctx workflow.Context, in AddLineItemInput) error {
 				return toApplicationError(validateAddLineItem(state, in))
+			},
+		},
+	)
+	if err != nil {
+		return BillState{}, err
+	}
+
+	err = workflow.SetUpdateHandlerWithOptions(ctx, UpdateVoidLineItem,
+		func(ctx workflow.Context, in VoidLineItemInput) (VoidLineItemResult, error) {
+			for i := range state.LineItems {
+				li := &state.LineItems[i]
+				if li.ID != in.LineItemID {
+					continue
+				}
+				if li.Voided {
+					return VoidLineItemResult{LineItem: *li, RunningTotal: state.Total}, nil
+				}
+
+				li.Voided = true
+				now := workflow.Now(ctx)
+				li.VoidedAt = &now
+
+				newTotal, err := recomputeTotal(state.Currency, state.LineItems)
+				if err != nil {
+					return VoidLineItemResult{}, err
+				}
+				state.Total = newTotal
+
+				return VoidLineItemResult{LineItem: *li, RunningTotal: state.Total}, nil
+			}
+			return VoidLineItemResult{}, fmt.Errorf("%w: %q", ErrLineItemNotFound, in.LineItemID)
+		},
+		workflow.UpdateHandlerOptions{
+			Validator: func(ctx workflow.Context, in VoidLineItemInput) error {
+				return toApplicationError(validateVoidLineItem(state, in))
 			},
 		},
 	)

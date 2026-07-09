@@ -10,6 +10,7 @@ import (
 type CreateBillRequest struct {
 	BillID    string    `json:"billId,omitempty"`
 	Currency  string    `json:"currency"`
+	Reference string 	`json:"reference,omitempty"`
 	PeriodEnd time.Time `json:"periodEnd"`
 }
 
@@ -30,11 +31,14 @@ type LineItemResponse struct {
 	Description string        `json:"description"`
 	Amount      MoneyResponse `json:"amount"`
 	AddedAt     time.Time     `json:"addedAt"`
+	Voided      bool          `json:"voided"`
+	VoidedAt    *time.Time    `json:"voidedAt,omitempty"`
 }
 
 type BillResponse struct {
 	BillID       string             `json:"billId"`
 	Currency     string             `json:"currency"`
+	Reference    string             `json:"reference,omitempty"`
 	Status       string             `json:"status"`
 	Total        MoneyResponse      `json:"total"`
 	LineItems    []LineItemResponse `json:"lineItems"`
@@ -49,6 +53,11 @@ type AddLineItemResponse struct {
 	RunningTotal MoneyResponse    `json:"runningTotal"`
 }
 
+type VoidLineItemResponse struct {
+	LineItem     LineItemResponse `json:"lineItem"`
+	RunningTotal MoneyResponse    `json:"runningTotal"`
+}
+
 func moneyResponse(m money.Money) MoneyResponse {
 	return MoneyResponse{Currency: string(m.Currency), Amount: m.DecimalString()}
 }
@@ -59,6 +68,8 @@ func lineItemResponse(li billworkflow.LineItem) LineItemResponse {
 		Description: li.Description,
 		Amount:      moneyResponse(li.Amount),
 		AddedAt:     li.AddedAt,
+		Voided:      li.Voided,
+		VoidedAt:    li.VoidedAt,
 	}
 }
 
@@ -70,6 +81,7 @@ func billResponse(s billworkflow.BillState) *BillResponse {
 	return &BillResponse{
 		BillID:       s.BillID,
 		Currency:     string(s.Currency),
+		Reference:    s.Reference,
 		Status:       string(s.Status),
 		Total:        moneyResponse(s.Total),
 		LineItems:    items,

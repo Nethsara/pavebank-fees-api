@@ -31,6 +31,7 @@ var (
 
 const (
 	UpdateAddLineItem = "addLineItem"
+	UpdateVoidLineItem = "voidLineItem"
 	UpdateCloseBill   = "closeBill"
 	QueryGetBill      = "getBill"
 )
@@ -39,6 +40,7 @@ const (
 	ErrTypeBillNotOpen      = "BillNotOpen"
 	ErrTypeCurrencyMismatch = "CurrencyMismatch"
 	ErrTypeInvalidLineItem  = "InvalidLineItem"
+	ErrTypeLineItemNotFound = "LineItemNotFound"
 )
 
 type LineItem struct {
@@ -46,11 +48,14 @@ type LineItem struct {
 	Description string      `json:"description"`
 	Amount      money.Money `json:"amount"`
 	AddedAt     time.Time   `json:"addedAt"`
+	Voided      bool        `json:"voided"`
+	VoidedAt    *time.Time  `json:"voidedAt,omitempty"`
 }
 
 type CreateBillInput struct {
 	BillID    string         `json:"billId"`
 	Currency  money.Currency `json:"currency"`
+	Reference string    	 `json:"reference,omitempty"`
 	PeriodEnd time.Time      `json:"periodEnd"`
 }
 
@@ -65,11 +70,21 @@ type AddLineItemResult struct {
 	RunningTotal money.Money `json:"runningTotal"`
 }
 
+type VoidLineItemInput struct {
+	LineItemID string `json:"lineItemId"`
+}
+
+type VoidLineItemResult struct {
+	LineItem     LineItem    `json:"lineItem"`
+	RunningTotal money.Money `json:"runningTotal"`
+}
+
 type CloseBillInput struct{}
 
 type BillState struct {
 	BillID       string         `json:"billId"`
 	Currency     money.Currency `json:"currency"`
+	Reference    string         `json:"reference,omitempty"`
 	Status       Status         `json:"status"`
 	Total        money.Money    `json:"total"`
 	LineItems    []LineItem     `json:"lineItems"`

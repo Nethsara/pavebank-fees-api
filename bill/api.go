@@ -107,6 +107,29 @@ func (s *Service) AddLineItem(ctx context.Context, billID string, req *AddLineIt
 	}, nil
 }
 
+func (s *Service) VoidLineItem(ctx context.Context, billID, lineItemID string) (*VoidLineItemResponse, error) {
+	handle, err := s.client.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   billWorkflowID(billID),
+		UpdateName:   billworkflow.UpdateVoidLineItem,
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+		Args:         []interface{}{billworkflow.VoidLineItemInput{LineItemID: lineItemID}},
+	})
+	if err != nil {
+		return nil, s.mapBillWorkflowErr(ctx, billID, err)
+	}
+
+	var result billworkflow.VoidLineItemResult
+	if err := handle.Get(ctx, &result); err != nil {
+		return nil, s.mapBillWorkflowErr(ctx, billID, err)
+	}
+
+	return &VoidLineItemResponse{
+		LineItem:     lineItemResponse(result.LineItem),
+		RunningTotal: moneyResponse(result.RunningTotal),
+	}, nil
+}
+
+
 func (s *Service) CloseBill(ctx context.Context, billID string) (*BillResponse, error) {
 	handle, err := s.client.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
 		WorkflowID:   billWorkflowID(billID),
@@ -125,7 +148,7 @@ func (s *Service) CloseBill(ctx context.Context, billID string) (*BillResponse, 
 	return billResponse(state), nil
 }
 
-func mapBillWorkflowErr(billID string, err error) error {
+func (s *Service) mapBillWorkflowErr(ctx context.Context, billID string, err error) error {
 	var appErr *temporal.ApplicationError
 	if errors.As(err, &appErr) {
 		switch appErr.Type() {
@@ -133,6 +156,8 @@ func mapBillWorkflowErr(billID string, err error) error {
 			return errs.B().Code(errs.Aborted).Msg(appErr.Message()).Err()
 		case billworkflow.ErrTypeCurrencyMismatch, billworkflow.ErrTypeInvalidLineItem:
 			return errs.B().Code(errs.InvalidArgument).Msg(appErr.Message()).Err()
+		case billworkflow.ErrTypeLineItemNotFound:
+			return errs.B().Code(errs.NotFound).Msg(appErr.Message()).Err()
 		default:
 			return errs.B().Code(errs.Internal).Cause(appErr).Err()
 		}
@@ -140,6 +165,9 @@ func mapBillWorkflowErr(billID string, err error) error {
 
 	var notFound *serviceerror.NotFound
 	if errors.As(err, &notFound) {
+		if _, queryErr := s.client.QueryWorkflow(ctx, billWorkflowID(billID), "", billworkflow.QueryGetBill); queryErr == nil {
+			return errs.B().Code(errs.Aborted).Msgf("bill %q is already closed", billID).Err()
+		}
 		return errs.B().Code(errs.NotFound).Msgf("bill %q not found", billID).Err()
 	}
 
